@@ -29,7 +29,13 @@ class [[eosio::contract("dep")]] dep : public contract {
       void claim(name buyer, name seller);
 
       [[eosio::action]]
+      void hold(name buyer, name seller);
+
+      [[eosio::action]]
       void refund(name buyer, name seller);
+
+      [[eosio::action]]
+      void resolve(name buyer, name seller, name user);
 
   private:
       struct [[eosio::table]] dep_rec {
@@ -44,6 +50,7 @@ class [[eosio::contract("dep")]] dep : public contract {
           asset           amount; 
           time_point_sec  request_time;
           bool            is_withdrawal;
+          bool            on_hold;
           uint64_t        primary_key() const {return seller.value;}
       };
 
@@ -89,6 +96,7 @@ void dep::create_claim(name buyer, name seller, bool is_withdrawal) {
     deposits dep_db(_self, buyer.value);
     auto deposit = dep_db.find(seller.value);
     eosio_assert(deposit != dep_db.end(), "Deposit not found");
+    eosio_assert(seller == deposit->seller, "seller missmatch");
     asset amount = deposit->amount;
     dep_db.erase(deposit);
 
@@ -101,6 +109,7 @@ void dep::create_claim(name buyer, name seller, bool is_withdrawal) {
             claim.request_time = current_time_point();
             claim.amount = amount;
             claim.is_withdrawal = is_withdrawal;
+            claim.on_hold = false;
         });
     } else {
         claims_db.modify(request, same_payer, [&](auto &req) {
@@ -109,27 +118,53 @@ void dep::create_claim(name buyer, name seller, bool is_withdrawal) {
         });
     }
 }
+void dep::hold(name buyer, name seller) {
+    claims db(_self, buyer.value);
+    auto request = db.find(seller.value);
+    eosio_assert(request != db.end(), "No such claim");
+    eosio_assert(buyer == request->buyer && seller == request->seller, "seller/buyer missmatch");
+    name user = request->is_withdrawal?request->seller:request->buyer;
+    require_auth(user);
+    if (request->on_hold) return;
+    db.modify(request, user, [&](auto &req) {
+        req.on_hold = true;
+    });
+}
 
 void dep::refund(name buyer, name seller) {
     claims db(_self, buyer.value);
     auto request = db.find(seller.value);
     eosio_assert(request != db.end(), "No claim request found");
-    name account;
-    if (request->is_withdrawal) {
-        require_auth(buyer);
-        account = buyer;
-    } else {
-        require_auth(seller);
-        account = seller;
-    }
+    name account = request->is_withdrawal?buyer:seller;
+    require_auth(account);
+    eosio_assert(buyer == request->buyer && seller == request->seller, "seller/buyer missmatch");
+    eosio_assert(!request->on_hold, "Request is hold");
     eosio_assert(request->request_time + seconds(refund_delay_sec) <= current_time_point(),
             "Refund is not available yet" );
-
     action transfer = action(
         permission_level{get_self() ,"active"_n},
         "eosio.token"_n,
         "transfer"_n,
         std::make_tuple(get_self(), account, request->amount, std::string("Here are your tokens"))
+    );
+    transfer.send();
+    db.erase(request);
+}
+
+void dep::resolve(name buyer, name seller, name user) {
+    require_auth(_self);
+    claims db(_self, buyer.value);
+    auto request = db.find(seller.value);
+    eosio_assert(request != db.end(), "No claim request found");
+    eosio_assert(buyer == request->buyer && seller == request->seller, "seller/buyer missmatch");
+    eosio_assert(request->request_time + seconds(refund_delay_sec) <= current_time_point(),
+            "Refund is not available yet" );
+    eosio_assert(request->on_hold, "Request is not hold");
+    action transfer = action(
+        permission_level{get_self() ,"active"_n},
+        "eosio.token"_n,
+        "transfer"_n,
+        std::make_tuple(get_self(), user, request->amount, std::string("Here are your tokens"))
     );
     transfer.send();
     db.erase(request);
@@ -159,8 +194,14 @@ extern "C" {
               execute_action(name(receiver), name(code), &dep::withdraw); 
         } else if(code == self && action == name("claim").value) {
               execute_action(name(receiver), name(code), &dep::claim); 
+        } else if(code == self && action == name("hold").value) {
+              execute_action(name(receiver), name(code), &dep::hold); 
         } else if(code == self && action == name("refund").value) {
               execute_action(name(receiver), name(code), &dep::refund); 
+        } else if(code == self && action == name("hold").value) {
+              execute_action(name(receiver), name(code), &dep::hold); 
+        } else if(code == self && action == name("resolve").value) {
+              execute_action(name(receiver), name(code), &dep::resolve); 
         } else if(code == name("eosio.token").value && action == name("transfer").value) {
               execute_action(name(receiver), name(code), &dep::transfer); 
         } else{
