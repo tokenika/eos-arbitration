@@ -16,24 +16,44 @@ class [[eosio::contract("dep")]] dep : public contract {
       const asset zero = asset(0, symbol("SYS", 4));
 
 
+      // listens for transfer to smartcontract's EOS account
+      // and populates deposits with sent money;
+      // memo should be seller account name.
       [[eosio::action]]
       void transfer(name from, name to, asset quantity, string memo);
 
+      // opens deposit to hold tokens from buyer to seller;
+      // ballance is set to zero
       [[eosio::action]]
       void opendeposit(name buyer, name seller);
 
+
+      // buyer can request his money back (in case the seller faild 
+      // to fullfill contract); withdraw money are not transfered imedetely
+      // (buyer should call "refund" acction)
       [[eosio::action]]
       void withdraw(name buyer, name seller);
 
+      // seller can claim money hild in ascrow; money are not transfered
+      // imedetely to seller account (he should use "refund" method 
+      // to initiate transfer)
       [[eosio::action]]
       void claim(name buyer, name seller);
 
-      [[eosio::action]]
-      void hold(name buyer, name seller);
-
+      // onece money are claimed (or withdrawn) seller (or buyer) can
+      // request refound and initate transfer to his account; 
+      // transfer can not be initiated before "refound_delay_sec" second after
+      // calime (witdraw)
       [[eosio::action]]
       void refund(name buyer, name seller);
 
+      // seller or buyer can hold transfers from escrow;
+      [[eosio::action]]
+      void hold(name buyer, name seller);
+
+      // hold transfers are conflicts that should be resolved by 
+      // arbitrator with "resolve" action; user is the account name
+      // to which money should be transfered
       [[eosio::action]]
       void resolve(name buyer, name seller, name user);
 
