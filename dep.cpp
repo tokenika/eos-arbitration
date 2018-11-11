@@ -13,132 +13,139 @@ class [[eosio::contract("dep")]] dep : public contract {
       using contract::contract;
     
       static constexpr uint32_t refund_delay_sec = 30;
+      const asset zero = asset(0, symbol("SYS", 4));
 
-
-      [[eosio::action]]
-      void hi( name user ) {
-          require_auth(user);
-          print( "Hello, ", name{user});
-      }
 
       [[eosio::action]]
       void transfer(name from, name to, asset quantity, string memo);
 
       [[eosio::action]]
-      void openaccount(name account);
+      void opendeposit(name buyer, name seller);
 
       [[eosio::action]]
-      void withdraw( name account, asset amount);
+      void withdraw(name buyer, name seller);
 
       [[eosio::action]]
-      void reclaim(name account);
+      void claim(name buyer, name seller);
 
-      static asset get_balance( name token_contract_account, name owner, symbol_code sym_code ) {
-          accounts accountstable( token_contract_account, owner.value );
-          const auto& ac = accountstable.get( sym_code.raw() );
-          return ac.balance;
-      }
+      [[eosio::action]]
+      void refund(name buyer, name seller);
+
   private:
-      struct [[eosio::table]] account {
-          asset    balance;
-
-          uint64_t primary_key()const { return balance.symbol.code().raw(); }
+      struct [[eosio::table]] dep_rec {
+          asset    amount;
+          name     seller;
+          uint64_t primary_key() const { return seller.value; }
       };
 
-      struct [[eosio::table]] withdrawal_request {
-          name            owner;
+      struct [[eosio::table]] claim_rec {
+          name            buyer;
+          name            seller;
+          asset           amount; 
           time_point_sec  request_time;
-          asset amount; 
-          uint64_t primary_key()const { return amount.symbol.code().raw(); }
+          bool            is_withdrawal;
+          uint64_t        primary_key() const {return seller.value;}
       };
 
-      typedef eosio::multi_index< "withdrawals"_n, withdrawal_request > withdrawals;
-      typedef eosio::multi_index< "accounts"_n, account > accounts;
-      void sub_balance( name owner, asset value );
-      void add_balance( name owner, asset value, name ram_payer );
+      typedef eosio::multi_index< "claims"_n, claim_rec > claims;
+      typedef eosio::multi_index< "deposits"_n, dep_rec > deposits;
+      void sub_balance(name buyer, name seller, asset value);
+      void add_balance(name buyer, name seller, asset value);
+      void create_claim(name buyer, name seller, bool is_withdrawal);
 };
 
-void dep::transfer( name from, name to, asset quantity, string memo ) {
+void dep::transfer(name from, name to, asset quantity, string memo) {
     if (from == _self || to != _self) {
         return;
     }
     eosio_assert(quantity.symbol == symbol("SYS", 4), "I think you're looking for another contract");
     eosio_assert(quantity.is_valid(), "Are you trying to corrupt me?");
     eosio_assert(quantity.amount > 0, "When pigs fly");
-    accounts to_acnts( _self, from.value );
-    auto to_acnt = to_acnts.find( quantity.symbol.code().raw() );
-    eosio_assert( to_acnt != to_acnts.end(), "Don't send us your money before opening account" );
-    add_balance(from, quantity, from);
+    deposits db(_self, from.value);
+    auto to_acnt = db.find(name(memo).value);
+    eosio_assert(to_acnt != db.end(), "Don't send us your money before opening account" );
+    add_balance(from, name(memo), quantity);
 }
 
-void dep::openaccount( name account) {
-    require_auth(account);
-    accounts to_acnts( _self, account.value );
-    auto to_acnt = to_acnts.find( symbol("SYS", 4).code().raw() );
-    eosio_assert( to_acnt == to_acnts.end(), "Account already exists" );
-    add_balance(account, asset(0, symbol("SYS", 4)), account);
+void dep::opendeposit(name buyer, name seller) {
+    require_auth(buyer);
+    deposits db(_self, buyer.value );
+    auto it = db.find(seller.value);
+    eosio_assert(it == db.end(), "Depoist already exists");
+    add_balance(buyer, seller, zero);
 }
 
-void dep::withdraw(name account, asset amount) {
-    require_auth(account);
-    accounts from_acnts( _self, account.value );
-    sub_balance(account, amount);
+void dep::withdraw(name buyer, name seller) {
+    require_auth(buyer);
+    create_claim(buyer, seller, true);
+}
 
-    withdrawals requests(_self, account.value);
-    auto request = requests.find(symbol("SYS", 4).code().raw());
-    if (request == requests.end()) {
-        requests.emplace(account, [&](auto &req) {
-            req.owner = account;
-            req.request_time = current_time_point();
-            req.amount = amount;
+void dep::claim(name buyer, name seller) {
+    require_auth(seller);
+    create_claim(buyer, seller, false);
+}
+
+void dep::create_claim(name buyer, name seller, bool is_withdrawal) {
+    deposits dep_db(_self, buyer.value);
+    auto deposit = dep_db.find(seller.value);
+    eosio_assert(deposit != dep_db.end(), "Deposit not found");
+    asset amount = deposit->amount;
+    dep_db.erase(deposit);
+
+    claims claims_db(_self, buyer.value);
+    auto request = claims_db.find(seller.value);
+    if (request == claims_db.end()) {
+        claims_db.emplace(is_withdrawal?buyer:seller, [&](auto &claim) {
+            claim.buyer = buyer;
+            claim.seller = seller;
+            claim.request_time = current_time_point();
+            claim.amount = amount;
+            claim.is_withdrawal = is_withdrawal;
         });
     } else {
-        requests.modify(request, account, [&](auto &req) {
+        claims_db.modify(request, same_payer, [&](auto &req) {
             req.amount += amount;
             req.request_time = current_time_point();
         });
     }
 }
 
-void dep::reclaim( name account) {
-    require_auth(account);
-    withdrawals requests(_self, account.value);
-    auto request = requests.find(symbol("SYS", 4).code().raw());
-    eosio_assert(request != requests.end(), "No request"); 
-    eosio_assert( request->request_time + seconds(refund_delay_sec) <= current_time_point(),
-            "refund is not available yet" );
-    action reclaim = action(
+void dep::refund(name buyer, name seller) {
+    claims db(_self, buyer.value);
+    auto request = db.find(seller.value);
+    eosio_assert(request != db.end(), "No claim request found");
+    name account;
+    if (request->is_withdrawal) {
+        require_auth(buyer);
+        account = buyer;
+    } else {
+        require_auth(seller);
+        account = seller;
+    }
+    eosio_assert(request->request_time + seconds(refund_delay_sec) <= current_time_point(),
+            "Refund is not available yet" );
+
+    action transfer = action(
         permission_level{get_self() ,"active"_n},
         "eosio.token"_n,
         "transfer"_n,
         std::make_tuple(get_self(), account, request->amount, std::string("Here are your tokens"))
     );
-    reclaim.send();
-    requests.erase(request);
+    transfer.send();
+    db.erase(request);
 }
 
-void dep::sub_balance( name owner, asset value ) {
-   accounts from_acnts( _self, owner.value );
-
-   const auto& from = from_acnts.get( value.symbol.code().raw(), "no account found" );
-   eosio_assert( from.balance.amount >= value.amount, "overdrawn balance" );
-
-   from_acnts.modify( from, owner, [&]( auto& a ) {
-       a.balance -= value;
-   });
-}
-
-void dep::add_balance( name owner, asset value, name ram_payer )
-{
-   accounts to_acnts( _self, owner.value );
-   auto to = to_acnts.find( value.symbol.code().raw() );
-   if( to == to_acnts.end() ) {
-      to_acnts.emplace( ram_payer, [&]( auto& a ){
-        a.balance = value;
+void dep::add_balance(name buyer, name seller, asset value) {
+   deposits db(_self, buyer.value);
+   auto dep = db.find(seller.value);
+   if(dep == db.end()) {
+      db.emplace(buyer, [&]( auto& a ){
+        a.seller = seller;
+        a.amount = value;
       });
    } else {
-      to_acnts.modify( to, same_payer, [&]( auto& a ) {
-        a.balance += value;
+      db.modify(dep, same_payer, [&]( auto& a ) {
+        a.amount += value;
       });
    }
 }
@@ -146,14 +153,14 @@ void dep::add_balance( name owner, asset value, name ram_payer )
 extern "C" {
     void apply(uint64_t receiver, uint64_t code, uint64_t action) {
         auto self = receiver;
-        if(code == self && action == name("hi").value) {
-              execute_action(name(receiver), name(code), &dep::hi); 
-        } else if(code == self && action == name("openaccount").value) {
-              execute_action(name(receiver), name(code), &dep::openaccount); 
+        if(code == self && action == name("opendeposit").value) {
+              execute_action(name(receiver), name(code), &dep::opendeposit); 
         } else if(code == self && action == name("withdraw").value) {
               execute_action(name(receiver), name(code), &dep::withdraw); 
-        } else if(code == self && action == name("reclaim").value) {
-              execute_action(name(receiver), name(code), &dep::reclaim); 
+        } else if(code == self && action == name("claim").value) {
+              execute_action(name(receiver), name(code), &dep::claim); 
+        } else if(code == self && action == name("refund").value) {
+              execute_action(name(receiver), name(code), &dep::refund); 
         } else if(code == name("eosio.token").value && action == name("transfer").value) {
               execute_action(name(receiver), name(code), &dep::transfer); 
         } else{
