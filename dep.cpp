@@ -23,7 +23,9 @@ class [[eosio::contract("dep")]] dep : public contract {
       void transfer(name from, name to, asset quantity, string memo);
 
       // opens deposit to hold tokens from buyer to seller;
-      // ballance is set to zero
+      // ballance is set to zero; right know deposit is identified by
+      // (buyer, seller) pair which means only one deal beatween the two
+      // can be in progress. We should add deposit names in the future.
       [[eosio::action]]
       void opendeposit(name buyer, name seller);
 
