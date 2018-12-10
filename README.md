@@ -10,7 +10,7 @@ parties can seek arbitration, in which case only a judge can decide who should
 receive funds.
 
 Warning: this is a work in progress. By no means, the smart-contract is ready
-for production use or complete. Documentation is source code suggests missing
+for production use or complete. Documentation in source code suggests missing
 pieces and possible improvements.
 
 

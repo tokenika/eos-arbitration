@@ -23,29 +23,29 @@ class [[eosio::contract("dep")]] dep : public contract {
       void transfer(name from, name to, asset quantity, string memo);
 
       // opens deposit to hold tokens from buyer to seller;
-      // ballance is set to zero; right know deposit is identified by
-      // (buyer, seller) pair which means only one deal beatween the two
+      // balance is set to zero; right know deposit is identified by
+      // (buyer, seller) pair which means only one deal between the two
       // can be in progress. We should add deposit names in the future.
       [[eosio::action]]
       void opendeposit(name buyer, name seller);
 
 
-      // buyer can request his money back (in case the seller faild 
-      // to fullfill contract); withdraw money are not transfered imedetely
-      // (buyer should call "refund" acction)
+      // buyer can request his money back (in case the seller failed 
+      // to fulfill contract); withdraw money are not transfered immediately
+      // (buyer should call "refund" action)
       [[eosio::action]]
       void withdraw(name buyer, name seller);
 
-      // seller can claim money hild in ascrow; money are not transfered
-      // imedetely to seller account (he should use "refund" method 
+      // seller can claim money hold in escrow; money are not transfered
+      // immediately to seller account (he should use "refund" method 
       // to initiate transfer)
       [[eosio::action]]
       void claim(name buyer, name seller);
 
-      // onece money are claimed (or withdrawn) seller (or buyer) can
-      // request refound and initate transfer to his account; 
-      // transfer can not be initiated before "refound_delay_sec" second after
-      // calime (witdraw)
+      // once money are claimed (or withdrawn) seller (or buyer) can
+      // request refund and initiate transfer to his account; 
+      // transfer can not be initiated before "refund_delay_sec" second after
+      // clime (withdraw)
       [[eosio::action]]
       void refund(name buyer, name seller);
 
@@ -159,7 +159,7 @@ void dep::refund(name buyer, name seller) {
     eosio_assert(request != db.end(), "No claim request found");
     name account = request->is_withdrawal?buyer:seller;
     require_auth(account);
-    eosio_assert(buyer == request->buyer && seller == request->seller, "seller/buyer missmatch");
+    eosio_assert(buyer == request->buyer && seller == request->seller, "seller/buyer mismatch");
     eosio_assert(!request->on_hold, "Request is hold");
     eosio_assert(request->request_time + seconds(refund_delay_sec) <= current_time_point(),
             "Refund is not available yet" );
