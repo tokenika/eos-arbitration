@@ -1,11 +1,8 @@
 
-all: dep.wasm dep
+all: escrow.wasm escrow
 
-dep.wasm: dep.cpp
-	eosio-cpp -o dep.wasm dep.cpp --abigen
-
-dep:
-	cleos set contract dep ../dep --abi dep.abi -p dep@active #| grep -ve "transaction executed locally, but may not be confirmed by the network yet" > /dev/stderr
+escrow.wasm: escrow.cpp
+	eosio-cpp -o escrow.wasm escrow.cpp --abigen
 
 clean:
-	rm -fr dep.wasm dep.abi *~
+	rm -fr escrow.wasm escrow.abi *~
